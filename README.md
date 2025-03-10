@@ -1,1 +1,2 @@
 # OOP-WSB
+Michał Szwedo
