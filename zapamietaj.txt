@@ -1,1 +1,2 @@
 git commit --amend --author="Looolek <edward123577@gmail.com>"
+.git config w user
