@@ -33,7 +33,7 @@ class NasaImageFetcher:
         print(f"\nZnaleziono {len(items)} wyników. Wyswietlono {limit} z nich:\n")
         print("")
 
-        for item in items[:limit]:  # 5 wyników
+        for item in items[:limit]:  # limit wyników
             item_data = item.get("data", [])
             links = item.get("links", [])
 
