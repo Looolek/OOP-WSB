@@ -19,7 +19,7 @@ class NasaImageFetcher:
             raise Exception(f'Nie udało się, kod statusu: {response.status_code}')
 
 
-    def display_results(self, data, limit=5):
+    def display_results(self, data, limit=9):
         if not data:
              print("Brak danych")
              return
@@ -33,23 +33,29 @@ class NasaImageFetcher:
         print(f"\nZnaleziono {len(items)} wyników. Wyswietlono {limit} z nich:\n")
         print("")
 
-        for item in items[:limit]:  # limit wyników
+
+        results_list = [] # Lista na wyniki jako stringi
+        results_list.append(f"Znaleziono {len(items)} wyników. Wyświetlanie max {limit}:\n")
+
+        for item in items[:limit]:
             item_data = item.get("data", [])
             links = item.get("links", [])
 
-            # Sprawdzamy czy lista nie jest pusta
             title = "Brak tytułu"
             if item_data and isinstance(item_data, list) and len(item_data) > 0:
                 title = item_data[0].get("title", "Brak tytułu")
 
-            # Sprawdzamy, czy lista nie jest pusta
-            href = "Brak linku"
+            href = "Brak linku do obrazu"
             if links and isinstance(links, list) and len(links) > 0:
-                href = links[0].get("href", "Brak linku")
+                 href = links[0].get("href", "Brak linku")
 
-            print(f"\nTytuł: {title}")
-            print(f"Link : {href}\n")
-            print("/" * 40)
+            results_list.append("-" * 40)
+            results_list.append(f"Tytuł: {title}")
+            results_list.append(f"Link : {href}")
+            results_list.append("-" * 40)
+            results_list.append("") # Dodatkowy odstęp
+
+        return "\n".join(results_list) # Zwraca jeden długi string
 
     def run(self):
         query = input("Podaj zapytanie: ")
