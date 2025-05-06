@@ -18,6 +18,34 @@ COLOR_SCROLL_TROUGH = '#000000'
 COLOR_SCROLL_BG = '#1A1A1A'
 
 
+def open_image_window(image_url, image_title):
+    log_message(f"Otwieranie okna dla: {image_title}")
+
+    img_window = tk.Toplevel(root)
+    img_window.title(image_title)
+    img_window.configure(bg=COLOR_BG)
+    img_window.geometry("600x450")
+    img_window.resizable(False, False)
+    img_window.attributes('-topmost', True)
+    status_label = ttk.Label(img_window, text="Pobieranie obrazka...", anchor='center')
+    status_label.pack(padx=0, pady=0, fill=tk.BOTH, expand=True)
+
+    try:
+        log_message(f"Pobieranie pełnego obrazka: {image_url}")
+        photo = fetch_and_process_image(image_url, size=None)
+    
+        if photo:
+            status_label.configure(image=photo, text="")
+            status_label.image = photo
+        else:
+            status_label.configure(text="Nie udało się załadować obrazka.", foreground="red")
+            log_message("Nie udało się załadować obrazka.")
+
+    except Exception as e:
+        log_message(f"Nieoczekiwany błąd w open_image_window: {e}")
+        status_label.configure(text=f"Wystąpił nieoczekiwany błąd:\n{e}", foreground="red")
+
+
 #Funkcja obsługująca kliknięcie przycisku
 def search_nasa():
     query = entry.get()
@@ -75,13 +103,18 @@ def search_nasa():
             title_label = ttk.Label(cell_frame, text=result['title'], anchor="center", wraplength=150, background=COLOR_BG)
             title_label.grid(row=1, column=0, sticky="ew", pady=(5,0))
 
-            log_message(f"Pobieranie obrazka dla: {result['title'][:30]}...")
-            photo = fetch_and_process_image(result['url'])
-            if photo:
-                img_label.configure(image=photo, text="")
-                img_label.image = photo
+            photo_thumbnail = fetch_and_process_image(result['url'], size=(150, 150))
+            if photo_thumbnail:
+                img_label.configure(image=photo_thumbnail, text="")
+                img_label.image = photo_thumbnail
+                current_url = result['url']
+                current_title = result['title']
+                img_label.bind("<Button-1>", lambda event, url=current_url, title=current_title: open_image_window(url, title))
+                img_label.configure(cursor="hand2") # Zmiana kursora na "rączkę" po najechaniu
             else:
-                img_label.configure(text="Błąd ładowania")
+                img_label.configure(text="Błąd obrazka")
+            
+            
 
         log_message("Wyświetlanie wyników zakończone.")
         for c in range(3): output_frame.columnconfigure(c, weight=1)
@@ -95,17 +128,19 @@ def search_nasa():
 
 
 #Funkcje pomocnicze
-def fetch_and_process_image(url, size=(150, 150)):
+def fetch_and_process_image(url, size=None):
     try:
-        response = requests.get(url, stream=True, timeout=10)
+        response = requests.get(url, stream=True, timeout=15)
         response.raise_for_status()
         image_data = response.content
         if not image_data: log_message(f"Puste dane obrazka z {url}"); return None
         img = Image.open(io.BytesIO(image_data))
         if img.mode not in ("RGB", "L"): img = img.convert("RGB")
-        img.thumbnail(size)
+        if size:
+            img.thumbnail(size)
         return ImageTk.PhotoImage(img)
-    except requests.exceptions.RequestException as e: log_message(f"Błąd pobierania obrazka {url}: {e}")
+    except requests.exceptions.Timeout: log_message(f"Timeout: {url}")
+    except requests.exceptions.RequestException as e: log_message(f"Błąd sieci: {url}: {e}")
     except Exception as e: log_message(f"Błąd przetwarzania obrazka {url}: {e}")
     return None
 
