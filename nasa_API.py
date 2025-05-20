@@ -1,270 +1,231 @@
-# Importowanie niezbędnych bibliotek
-import tkinter as tk  # Główna biblioteka do tworzenia GUI
-from tkinter import ttk  # Rozszerzenie tkinter z nowocześniejszymi widgetami
-import requests  # Biblioteka do wykonywania zapytań HTTP
-from PIL import Image, ImageTk  # Biblioteki do obsługi obrazów
-import io  # Biblioteka do operacji wejścia/wyjścia
-from obiekreq import NasaImageFetcher  # Import własnej klasy do pobierania danych z API NASA
+import tkinter as tk  # Importuje główny moduł do tworzenia GUI w Pythonie
+from tkinter import ttk  # Importuje rozszerzenie do tkintera z nowoczesnymi widgetami
+from PIL import Image, ImageTk  # Importuje klasy do obsługi i wyświetlania obrazów
+import requests  # Importuje bibliotekę do wykonywania zapytań HTTP
+import io  # Importuje moduł do operacji na strumieniach (np. konwersja bajtów na obraz)
+from obiekreq import NasaImageFetcher  # Importuje własną klasę do pobierania danych z NASA API
 
+# --- Panel logów ---
+class NasaLogPanel(ttk.Frame):  # Definiuje klasę panelu logów, dziedziczącą po ramce ttk
+    def __init__(self, master, color_bg, color_fg):  # Konstruktor klasy
+        super().__init__(master)  # Wywołuje konstruktor klasy bazowej
+        # Tworzy etykietę "Logi:" z odpowiednimi kolorami
+        self.label = ttk.Label(self, text="Logi:", background=color_bg, foreground=color_fg)
+        self.label.grid(row=0, column=0, sticky="nw", padx=5, pady=5)  # Ustawia etykietę w siatce
+        # Tworzy pole tekstowe do wyświetlania logów, wyłączone do edycji
+        self.text = tk.Text(self, width=30, height=10, wrap=tk.WORD, state=tk.DISABLED,
+                            bg=color_bg, fg=color_fg, insertbackground=color_fg, relief=tk.SOLID)
+        self.text.grid(row=1, column=0, sticky="nsew", padx=5, pady=5)  # Ustawia pole tekstowe w siatce
+        # Dodaje pionowy pasek przewijania do pola tekstowego
+        self.scroll = ttk.Scrollbar(self, orient=tk.VERTICAL, command=self.text.yview)
+        self.scroll.grid(row=1, column=1, sticky="ns", pady=5)  # Ustawia pasek przewijania w siatce
+        self.text['yscrollcommand'] = self.scroll.set  # Łączy przewijanie paska z polem tekstowym
+        self.rowconfigure(1, weight=1)  # Pozwala wierszowi 1 rozciągać się przy zmianie rozmiaru panelu
+        self.columnconfigure(0, weight=1)  # Pozwala kolumnie 0 rozciągać się przy zmianie rozmiaru panelu
 
-# Definicja palety kolorów w stylu terminala (czarne tło, zielony tekst)
-COLOR_BG = '#000000'  # Kolor tła - czarny
-COLOR_FG = '#00FF00'  # Kolor tekstu - jaskrawozielony
-COLOR_FG_DIM = '#008F00'  # Przyciemniony zielony do elementów drugorzędnych
-COLOR_ENTRY_BG = '#000000'  # Tło pola wprowadzania - czarne
-COLOR_CURSOR = '#00FF00'  # Kolor kursora - zielony
-COLOR_BUTTON_BG = '#1A1A1A'  # Tło przycisków - ciemnoszare
-COLOR_BUTTON_ACTIVE = '#333333'  # Kolor aktywnego przycisku - jaśniejszy szary
-COLOR_SCROLL_TROUGH = '#000000'  # Tło paska przewijania - czarne
-COLOR_SCROLL_BG = '#1A1A1A'  # Kolor suwaka przewijania - ciemnoszary
+    def log(self, msg):  # Metoda do dodawania wiadomości do logów
+        self.text.configure(state=tk.NORMAL)  # Odblokowuje pole tekstowe do edycji
+        self.text.insert(tk.END, str(msg) + "\n")  # Dodaje wiadomość na końcu tekstu
+        self.text.see(tk.END)  # Przewija do najnowszego wpisu
+        self.text.configure(state=tk.DISABLED)  # Ponownie blokuje pole tekstowe
 
+# --- Panel wyników ---
+class NasaResultsPanel(ttk.Frame):  # Definiuje klasę panelu wyników
+    def __init__(self, master, log_panel, image_fetcher, color_bg, color_fg, **kwargs):
+        super().__init__(master, **kwargs)  # Wywołuje konstruktor klasy bazowej
+        self.log_panel = log_panel  # Przechowuje referencję do panelu logów
+        self.image_fetcher = image_fetcher  # Przechowuje referencję do fetchera obrazów
+        self.color_bg = color_bg  # Przechowuje kolor tła
+        self.color_fg = color_fg  # Przechowuje kolor tekstu
+        # Tworzy etykietę "Wyniki:" na górze panelu
+        self.label = ttk.Label(self, text="Wyniki:", background=color_bg, foreground=color_fg)
+        self.label.grid(row=0, column=0, columnspan=3, sticky="nw", padx=5, pady=5)
+        self.images = []  # Lista do przechowywania referencji do obrazków (by nie zostały usunięte przez GC)
 
-# Funkcja do otwierania nowego okna z powiększonym obrazem
-def open_image_window(image_url, image_title):
-    log_message(f"Otwieranie okna dla: {image_title}")  # Logowanie informacji o otwarciu okna
-    
-    img_window = tk.Toplevel(root)  # Tworzenie nowego okna jako okna podrzędnego do głównego okna
-    img_window.title(image_title)  # Ustawienie tytułu okna na tytuł obrazu
-    img_window.configure(bg=COLOR_BG)  # Ustawienie koloru tła okna
-    img_window.geometry("600x450")  # Ustawienie początkowego rozmiaru okna
-    img_window.resizable(False, False)  # Wyłączenie możliwości zmiany rozmiaru okna
-    img_window.attributes('-topmost', True)  # Ustawienie okna zawsze na wierzchu
-    status_label = ttk.Label(img_window, text="Pobieranie obrazka...", anchor='center')  # Etykieta informująca o pobieraniu
-    status_label.pack(padx=0, pady=0, fill=tk.BOTH, expand=True)  # Umieszczenie etykiety w oknie
+    def clear(self):  # Metoda do czyszczenia panelu wyników
+        for widget in self.winfo_children():  # Iteruje po wszystkich widgetach w panelu
+            if widget != self.label:  # Pomija etykietę "Wyniki:"
+                widget.destroy()  # Usuwa widget
+        self.images.clear()  # Czyści listę obrazków
 
-    try:  # Rozpoczęcie bloku obsługi wyjątków
-        log_message(f"Pobieranie pełnego obrazka: {image_url}")  # Logowanie informacji o pobieraniu obrazu
-        photo = fetch_and_process_image(image_url, size=None)  # Pobranie obrazu w pełnym rozmiarze
-    
-        if photo:  # Jeśli obraz został poprawnie pobrany
-            status_label.configure(image=photo, text="")  # Wyświetlenie obrazu w etykiecie
-            status_label.image = photo  # Zachowanie referencji do obrazu (zapobiega usunięciu przez garbage collector)
-        else:  # Jeśli nie udało się pobrać obrazu
-            status_label.configure(text="Nie udało się załadować obrazka.", foreground="red")  # Wyświetlenie komunikatu o błędzie
-            log_message("Nie udało się załadować obrazka.")  # Logowanie informacji o błędzie
+    def show_results(self, items):  # Metoda do wyświetlania wyników (obrazków)
+        self.clear()  # Czyści panel przed wyświetleniem nowych wyników
+        if not items:  # Jeśli lista wyników jest pusta
+            # Wyświetla komunikat o braku wyników
+            ttk.Label(self, text="Brak wyników.", background=self.color_bg, foreground=self.color_fg).grid(row=1, column=0, columnspan=3, pady=10)
+            return  # Kończy działanie metody
 
-    except Exception as e:  # Obsługa wszystkich wyjątków
-        log_message(f"Nieoczekiwany błąd w open_image_window: {e}")  # Logowanie informacji o błędzie
-        status_label.configure(text=f"Wystąpił nieoczekiwany błąd:\n{e}", foreground="red")  # Wyświetlenie komunikatu o błędzie
+        for i, result in enumerate(items):  # Iteruje po wynikach
+            row = (i // 3) + 1  # Oblicza numer wiersza (3 kolumny na wiersz)
+            col = i % 3  # Oblicza numer kolumny
+            # Tworzy ramkę na pojedynczy wynik (obrazek + tytuł)
+            frame = ttk.Frame(self, padding=5, style='ImageCard.TFrame')
+            frame.grid(row=row, column=col, padx=5, pady=5, sticky="n")
+            # Tworzy etykietę na miniaturę obrazka
+            img_label = ttk.Label(frame, text="Ładowanie...", anchor='center', background=self.color_bg, foreground=self.color_fg)
+            img_label.grid(row=0, column=0, sticky="ew")
+            # Tworzy etykietę na tytuł obrazka
+            title_label = ttk.Label(frame, text=result['title'], anchor="center", wraplength=150, background=self.color_bg, foreground=self.color_fg)
+            title_label.grid(row=1, column=0, sticky="ew", pady=(5,0))
 
+            # Pobiera miniaturę obrazka (150x150)
+            photo = self.image_fetcher.fetch_image(result['url'], size=(150,150))
+            if photo:  # Jeśli udało się pobrać obraz
+                img_label.configure(image=photo, text="")  # Ustawia obrazek w etykiecie
+                img_label.image = photo  # Przechowuje referencję do obrazka
+                self.images.append(photo)  # Dodaje obrazek do listy, by nie został usunięty
+                # Dodaje obsługę kliknięcia na miniaturę (otwiera powiększony obrazek)
+                img_label.bind("<Button-1>", lambda e, url=result['url'], title=result['title']: self.show_full_image(url, title))
+                img_label.configure(cursor="hand2")  # Ustawia kursor na "rączkę"
+            else:  # Jeśli nie udało się pobrać obrazka
+                img_label.configure(text="Błąd obrazka")  # Wyświetla komunikat o błędzie
 
-# Funkcja wywoływana po kliknięciu przycisku "Szukaj"
-def search_nasa():
-    query = entry.get()  # Pobranie tekstu z pola wprowadzania
-    if not query:  # Sprawdzenie czy pole nie jest puste
-        log_message("Proszę podać zapytanie.")  # Logowanie informacji o pustym polu
-        return  # Przerwanie wykonywania funkcji
+    def show_full_image(self, url, title):  # Metoda do wyświetlania powiększonego obrazka w nowym oknie
+        self.log_panel.log(f"Otwieranie okna dla: {title}")  # Loguje otwarcie nowego okna
+        win = tk.Toplevel(self)  # Tworzy nowe okno podrzędne
+        win.title(title)  # Ustawia tytuł okna
+        win.geometry("600x450")  # Ustawia rozmiar okna
+        win.configure(bg=self.color_bg)  # Ustawia kolor tła
+        # Tworzy etykietę informującą o pobieraniu obrazka
+        label = ttk.Label(win, text="Pobieranie obrazka...", anchor='center', background=self.color_bg, foreground=self.color_fg)
+        label.pack(fill=tk.BOTH, expand=True)  # Umieszcza etykietę w oknie
+        # Pobiera pełny obrazek (bez zmiany rozmiaru)
+        photo = self.image_fetcher.fetch_image(url, size=None)
+        if photo:  # Jeśli udało się pobrać obrazek
+            label.configure(image=photo, text="")  # Wyświetla obrazek
+            label.image = photo  # Przechowuje referencję do obrazka
+        else:  # Jeśli nie udało się pobrać obrazka
+            label.configure(text="Nie udało się załadować obrazka.", foreground="red")  # Wyświetla komunikat o błędzie
 
-    log_message(f"Rozpoczynam wyszukiwanie dla: {query}")  # Logowanie rozpoczęcia wyszukiwania
+# --- Panel wyszukiwania ---
+class NasaSearchPanel(ttk.Frame):  # Definiuje klasę panelu wyszukiwania
+    def __init__(self, master, on_search, color_bg, color_fg, **kwargs):
+        super().__init__(master, **kwargs)  # Wywołuje konstruktor klasy bazowej
+        # Tworzy etykietę "Podaj zapytanie:"
+        ttk.Label(self, text="Podaj zapytanie:", background=color_bg, foreground=color_fg).grid(row=0, column=0, padx=5, pady=5, sticky='e')
+        # Tworzy pole do wpisywania zapytania
+        self.entry = ttk.Entry(self, width=30)
+        self.entry.grid(row=0, column=1, padx=5, pady=5, sticky='ew')
+        # Tworzy przycisk "Szukaj"
+        self.button = ttk.Button(self, text="Szukaj", command=self._search)
+        self.button.grid(row=0, column=2, padx=5, pady=5, sticky='w')
+        self.on_search = on_search  # Przechowuje referencję do funkcji obsługującej wyszukiwanie
+        self.columnconfigure(1, weight=1)  # Pozwala kolumnie z polem Entry rozciągać się przy zmianie rozmiaru
 
-    # Usunięcie poprzednich wyników (wszystkich widgetów oprócz etykiety "Wyniki:")
-    for widget in output_frame.winfo_children():
-        if widget != text_output:
-            widget.destroy()
+    def _search(self):  # Metoda wywoływana po kliknięciu przycisku "Szukaj"
+        query = self.entry.get()  # Pobiera tekst z pola Entry
+        self.on_search(query)  # Wywołuje funkcję wyszukiwania z podanym zapytaniem
 
-    try:  # Rozpoczęcie bloku obsługi wyjątków
-        data = fetcher.fetch_data(query)  # Pobranie danych z API NASA
-        items = data.get("collection", {}).get("items", [])  # Wyodrębnienie elementów z odpowiedzi
-        
-        # Sprawdzenie czy znaleziono jakiekolwiek wyniki
-        if not items:
-            log_message("Nie znaleziono żadnych wyników.")  # Logowanie informacji o braku wyników
-            ttk.Label(output_frame, text="Brak wyników.").grid(row=1, column=0, columnspan=3, pady=10)  # Wyświetlenie komunikatu
-            return  # Przerwanie wykonywania funkcji
+# --- Fetcher obrazków (adapter do NasaImageFetcher) ---
+class ImageFetcher:  # Klasa pomocnicza do pobierania danych i obrazków
+    def __init__(self):
+        self.fetcher = NasaImageFetcher()  # Tworzy instancję klasy do pobierania danych z NASA API
 
-        log_message(f"Znaleziono {len(items)} wyników. Próba wyświetlenia do 9.")  # Logowanie informacji o liczbie wyników
+    def fetch_data(self, query):  # Metoda do pobierania danych (JSON) z NASA API
+        return self.fetcher.fetch_data(query)  # Wywołuje metodę z klasy NasaImageFetcher
 
-        # Przygotowanie listy wyników do wyświetlenia
-        results_to_display = []
-        for item in items[:9]:  # Ograniczenie do maksymalnie 9 wyników
-            item_data = item.get("data", [])  # Pobranie danych elementu
-            links = item.get("links", [])  # Pobranie linków elementu
-            title = "Brak tytułu"  # Domyślny tytuł
-            href = None  # Domyślny URL obrazu
-            if item_data:  # Jeśli są dane elementu
-                title = item_data[0].get("title", "Brak tytułu")  # Pobranie tytułu
-            # Pobranie URL obrazu podglądu
-            if links:  # Jeśli są linki
-                preview_link = next((link.get('href') for link in links if link.get('rel') == 'preview'), None)  # Pobranie linku podglądu
-                if preview_link: href = preview_link  # Przypisanie URL obrazu
-            if href: results_to_display.append({'title': title, 'url': href})  # Dodanie wyniku do listy
+    def fetch_image(self, url, size=None):  # Metoda do pobierania obrazka z podanego URL
+        try:
+            response = requests.get(url, stream=True, timeout=15)  # Wysyła żądanie HTTP GET do podanego URL
+            response.raise_for_status()  # Sprawdza, czy odpowiedź jest poprawna (nie ma błędu HTTP)
+            img = Image.open(io.BytesIO(response.content))  # Wczytuje obrazek z pobranych bajtów
+            if img.mode not in ("RGB", "L"):  # Jeśli obrazek nie jest w trybie RGB lub L (czarno-białym)
+                img = img.convert("RGB")  # Konwertuje obrazek do trybu RGB
+            if size:  # Jeśli podano rozmiar miniatury
+                img.thumbnail(size)  # Tworzy miniaturę obrazka
+            return ImageTk.PhotoImage(img)  # Zwraca obrazek w formacie zgodnym z tkinterem
+        except Exception as e:  # Obsługuje wszelkie błędy
+            print(f"Błąd pobierania obrazka: {e}")  # Wypisuje błąd na konsolę
+            return None  # Zwraca None w przypadku błędu
 
-        # Sprawdzenie czy znaleziono obrazki do wyświetlenia
-        if not results_to_display:
-            log_message("Nie znaleziono wyników z obrazkami do wyświetlenia.")  # Logowanie informacji o braku obrazków
-            ttk.Label(output_frame, text="Brak wyników z obrazkami.").grid(row=1, column=0, columnspan=3, pady=10)  # Wyświetlenie komunikatu
-            return  # Przerwanie wykonywania funkcji
+# --- Główna aplikacja ---
+class NasaImageApp:  # Definiuje główną klasę aplikacji
+    # Kolory jako stałe klasowe
+    COLOR_BG = '#000000'  # Kolor tła
+    COLOR_FG = '#00FF00'  # Kolor tekstu
+    COLOR_FG_DIM = '#008F00'  # Przyciemniony zielony
+    COLOR_ENTRY_BG = '#000000'  # Tło pola Entry
+    COLOR_CURSOR = '#00FF00'  # Kolor kursora
+    COLOR_BUTTON_BG = '#1A1A1A'  # Tło przycisków
+    COLOR_BUTTON_ACTIVE = '#333333'  # Aktywny przycisk
+    COLOR_SCROLL_TROUGH = '#000000'  # Tło paska przewijania
+    COLOR_SCROLL_BG = '#1A1A1A'  # Tło suwaka przewijania
 
+    def __init__(self, root):  # Konstruktor głównej klasy aplikacji
+        self.root = root  # Przechowuje referencję do głównego okna
+        self.root.title("NASA images")  # Ustawia tytuł okna
+        self.root.configure(bg=self.COLOR_BG)  # Ustawia kolor tła okna
+        self.setup_styles()  # Wywołuje metodę konfigurującą style widgetów
 
-        # Tworzenie siatki 3x3 z wynikami
-        for i, result in enumerate(results_to_display):
-            row = (i // 3) + 1  # Obliczenie wiersza (dzielenie całkowite)
-            col = i % 3  # Obliczenie kolumny (reszta z dzielenia)
-            cell_frame = ttk.Frame(output_frame, padding=5, style='ImageCard.TFrame')  # Tworzenie ramki dla wyniku
-            cell_frame.grid(row=row, column=col, padx=5, pady=5, sticky="n")  # Umieszczenie ramki w siatce
-            cell_frame.rowconfigure(0, weight=0); cell_frame.rowconfigure(1, weight=0)  # Konfiguracja wierszy ramki
-            cell_frame.columnconfigure(0, weight=1)  # Konfiguracja kolumny ramki
-            img_label = ttk.Label(cell_frame, text="Ładowanie...", anchor='center', background=COLOR_BG)  # Etykieta na obraz
-            img_label.grid(row=0, column=0, sticky="ew")  # Umieszczenie etykiety w ramce
-            title_label = ttk.Label(cell_frame, text=result['title'], anchor="center", wraplength=150, background=COLOR_BG)  # Etykieta na tytuł
-            title_label.grid(row=1, column=0, sticky="ew", pady=(5,0))  # Umieszczenie etykiety w ramce
+        self.image_fetcher = ImageFetcher()  # Tworzy instancję fetchera obrazków
 
-            # Pobranie i wyświetlenie miniatury obrazu
-            photo_thumbnail = fetch_and_process_image(result['url'], size=(150, 150))  # Pobranie miniatury obrazu
-            if photo_thumbnail:  # Jeśli miniatura została poprawnie pobrana
-                img_label.configure(image=photo_thumbnail, text="")  # Wyświetlenie miniatury w etykiecie
-                img_label.image = photo_thumbnail  # Zachowanie referencji do miniatury
-                current_url = result['url']  # Zapamiętanie URL obrazu
-                current_title = result['title']  # Zapamiętanie tytułu obrazu
-                # Dodanie obsługi kliknięcia na miniaturę (otwarcie powiększonego obrazu)
-                img_label.bind("<Button-1>", lambda event, url=current_url, title=current_title: open_image_window(url, title))
-                img_label.configure(cursor="hand2")  # Zmiana kursora na "rączkę" po najechaniu na miniaturę
-            else:  # Jeśli nie udało się pobrać miniatury
-                img_label.configure(text="Błąd obrazka")  # Wyświetlenie komunikatu o błędzie
-            
-            
+        # Tworzy panel logów i umieszcza go w siatce
+        self.log_panel = NasaLogPanel(root, self.COLOR_BG, self.COLOR_FG)
+        self.log_panel.grid(row=1, column=2, sticky="nse", padx=(0,10), pady=(0,10))
+        # Tworzy panel wyników i umieszcza go w siatce
+        self.results_panel = NasaResultsPanel(root, self.log_panel, self.image_fetcher, self.COLOR_BG, self.COLOR_FG)
+        self.results_panel.grid(row=1, column=0, sticky="nsew", padx=(10,0), pady=(0,10))
+        # Tworzy panel wyszukiwania i umieszcza go w siatce
+        self.search_panel = NasaSearchPanel(root, self.on_search, self.COLOR_BG, self.COLOR_FG)
+        self.search_panel.grid(row=0, column=0, columnspan=3, sticky="n", padx=10, pady=10)
 
-        log_message("Wyświetlanie wyników zakończone.")  # Logowanie zakończenia wyświetlania wyników
-        # Konfiguracja kolumn w ramce wyników
-        for c in range(3): output_frame.columnconfigure(c, weight=1)
-        # Konfiguracja wierszy w ramce wyników
-        num_rows_needed = (len(results_to_display) + 2) // 3
-        for r in range(1, num_rows_needed + 1): output_frame.rowconfigure(r, weight=1)
+        # Konfiguruje siatkę głównego okna (rozciągliwość wierszy i kolumn)
+        root.rowconfigure(0, weight=0)  # Wiersz 0 (panel wyszukiwania) nie rozciąga się
+        root.rowconfigure(1, weight=1)  # Wiersz 1 (panele wyników i logów) rozciąga się
+        root.columnconfigure(0, weight=1)  # Kolumna 0 (panel wyników) rozciąga się
+        root.columnconfigure(2, weight=1, minsize=300)  # Kolumna 2 (panel logów) rozciąga się i ma minimalną szerokość
 
-    except Exception as error:  # Obsługa wszystkich wyjątków
-        log_message(f"Błąd podczas wyszukiwania lub przetwarzania: {error}")  # Logowanie informacji o błędzie
-        ttk.Label(output_frame, text=f"Wystąpił błąd:\n{error}").grid(row=1, column=0, columnspan=3, pady=10)  # Wyświetlenie komunikatu o błędzie
+        self.log_panel.log("Aplikacja gotowa.")  # Loguje gotowość aplikacji
 
+    def on_search(self, query):  # Metoda wywoływana po kliknięciu "Szukaj"
+        if not query:  # Jeśli pole wyszukiwania jest puste
+            self.log_panel.log("Proszę podać zapytanie.")  # Loguje prośbę o wpisanie zapytania
+            return  # Kończy działanie metody
+        self.log_panel.log(f"Rozpoczynam wyszukiwanie dla: {query}")  # Loguje rozpoczęcie wyszukiwania
+        self.results_panel.clear()  # Czyści panel wyników
+        try:
+            data = self.image_fetcher.fetch_data(query)  # Pobiera dane z NASA API
+            items = data.get("collection", {}).get("items", [])  # Pobiera listę wyników z odpowiedzi
+            results = []  # Tworzy pustą listę na przetworzone wyniki
+            for item in items[:9]:  # Przetwarza maksymalnie 9 wyników
+                title = item.get("data", [{}])[0].get("title", "Brak tytułu")  # Pobiera tytuł obrazka
+                links = item.get("links", [])  # Pobiera listę linków
+                # Szuka linku do podglądu obrazka
+                href = next((l.get('href') for l in links if l.get('rel') == 'preview'), None)
+                if href:  # Jeśli link istnieje
+                    results.append({'title': title, 'url': href})  # Dodaje wynik do listy
+            self.results_panel.show_results(results)  # Wyświetla wyniki w panelu
+            self.log_panel.log(f"Wyświetlono {len(results)} wyników.")  # Loguje liczbę wyświetlonych wyników
+        except Exception as e:  # Obsługuje błędy
+            self.log_panel.log(f"Błąd podczas wyszukiwania: {e}")  # Loguje błąd
 
-# Funkcja do pobierania i przetwarzania obrazów
-def fetch_and_process_image(url, size=None):
-    try:  # Rozpoczęcie bloku obsługi wyjątków
-        response = requests.get(url, stream=True, timeout=15)  # Pobranie obrazu z podanego URL
-        response.raise_for_status()  # Rzucenie wyjątku jeśli wystąpił błąd HTTP
-        image_data = response.content  # Pobranie danych obrazu
-        if not image_data: log_message(f"Puste dane obrazka z {url}"); return None  # Sprawdzenie czy dane nie są puste
-        img = Image.open(io.BytesIO(image_data))  # Konwersja danych binarnych na obiekt Image
-        if img.mode not in ("RGB", "L"): img = img.convert("RGB")  # Konwersja do RGB jeśli potrzebna
-        if size:  # Jeśli podano rozmiar
-            img.thumbnail(size)  # Zmiana rozmiaru z zachowaniem proporcji
-        return ImageTk.PhotoImage(img)  # Konwersja na format obsługiwany przez tkinter
-    except requests.exceptions.Timeout: log_message(f"Timeout: {url}")  # Obsługa błędu przekroczenia czasu
-    except requests.exceptions.RequestException as e: log_message(f"Błąd sieci: {url}: {e}")  # Obsługa błędu zapytania HTTP
-    except Exception as e: log_message(f"Błąd przetwarzania obrazka {url}: {e}")  # Obsługa innych błędów
-    return None  # Zwrócenie None w przypadku błędu
+    def setup_styles(self):  # Metoda konfigurująca style widgetów
+        style = ttk.Style(self.root)  # Tworzy obiekt stylu
+        style.theme_use('clam')  # Ustawia motyw "clam"
+        # Konfiguruje styl ramki na obrazki
+        style.configure('ImageCard.TFrame', background=self.COLOR_BG, relief=tk.SOLID, borderwidth=1, bordercolor=self.COLOR_FG)
+        # Konfiguruje domyślny styl
+        style.configure('.', background=self.COLOR_BG, foreground=self.COLOR_FG, bordercolor=self.COLOR_FG_DIM)
+        # Konfiguruje styl ramek
+        style.configure('TFrame', background=self.COLOR_BG)
+        # Konfiguruje styl etykiet
+        style.configure('TLabel', background=self.COLOR_BG, foreground=self.COLOR_FG, padding=2)
+        # Konfiguruje styl przycisków
+        style.configure('TButton', background=self.COLOR_BUTTON_BG, foreground=self.COLOR_FG, padding=5, borderwidth=1, relief=tk.RAISED, bordercolor=self.COLOR_FG_DIM)
+        # Konfiguruje styl aktywnego przycisku
+        style.map('TButton', background=[('active', self.COLOR_BUTTON_ACTIVE)])
+        # Konfiguruje styl pola Entry
+        style.configure('TEntry', fieldbackground=self.COLOR_ENTRY_BG, foreground=self.COLOR_FG, insertcolor=self.COLOR_CURSOR, bordercolor=self.COLOR_FG_DIM, borderwidth=1)
+        # Konfiguruje styl paska przewijania
+        style.configure('Vertical.TScrollbar', background=self.COLOR_SCROLL_BG, troughcolor=self.COLOR_SCROLL_TROUGH, bordercolor=self.COLOR_BG, arrowcolor=self.COLOR_FG)
+        # Konfiguruje styl aktywnego paska przewijania
+        style.map('Vertical.TScrollbar', background=[('active', self.COLOR_BUTTON_ACTIVE)])
 
+# --- Uruchomienie ---
+def main():  # Funkcja uruchamiająca aplikację
+    root = tk.Tk()  # Tworzy główne okno aplikacji
+    app = NasaImageApp(root)  # Tworzy instancję głównej klasy aplikacji
+    root.mainloop()  # Uruchamia główną pętlę zdarzeń
 
-# Funkcja do dodawania wiadomości do widgetu logów
-def append_log_message(widget, text):
-    if widget.winfo_exists():  # Sprawdzenie czy widget istnieje
-        try:  # Rozpoczęcie bloku obsługi wyjątków
-            widget.configure(state=tk.NORMAL)  # Odblokowanie widgetu do edycji
-            widget.insert(tk.END, str(text) + "\n")  # Dodanie tekstu na końcu
-            widget.see(tk.END)  # Przewinięcie do końca
-            widget.configure(state=tk.DISABLED)  # Zablokowanie widgetu przed edycją
-        except tk.TclError as e:  # Obsługa błędów Tkinter
-            print(f"Błąd Tkinter log: {e}")  # Wypisanie błędu do konsoli
-            print(f"LOG (awaryjny): {text}")  # Awaryjne logowanie do konsoli
-    else: print(f"LOG (widget nie istnieje): {text}")  # Awaryjne logowanie do konsoli
-
-
-# Funkcja do logowania wiadomości
-def log_message(text):
-    # Sprawdzenie czy widget logów istnieje i jest poprawnego typu
-    if 'text_log_widget' in globals() and isinstance(text_log_widget, tk.Text) and text_log_widget.winfo_exists():
-         append_log_message(text_log_widget, text)  # Dodanie wiadomości do widgetu logów
-    else: print(f"LOG: {text}")  # Awaryjne logowanie do konsoli
-
-
-# Utworzenie głównego okna aplikacji
-root = tk.Tk()  # Inicjalizacja głównego okna
-root.title("NASA images")  # Ustawienie tytułu okna
-root.configure(bg=COLOR_BG)  # Ustawienie koloru tła
-
-
-# Konfiguracja stylów widgetów
-style = ttk.Style(root)  # Inicjalizacja obiektu stylu
-style.theme_use('clam')  # Ustawienie motywu
-
-
-# Styl ramki dla obrazków
-style.configure('ImageCard.TFrame', background=COLOR_BG, relief=tk.SOLID, borderwidth=1, bordercolor=COLOR_FG)  # Konfiguracja stylu ramki obrazka
-
-
-# Konfiguracja stylów dla różnych typów widgetów
-style.configure('.', background=COLOR_BG, foreground=COLOR_FG, bordercolor=COLOR_FG_DIM)  # Konfiguracja domyślnego stylu
-style.configure('TFrame', background=COLOR_BG)  # Konfiguracja stylu ramki
-style.configure('TLabel', background=COLOR_BG, foreground=COLOR_FG, padding=2)  # Konfiguracja stylu etykiety
-style.configure('TButton', background=COLOR_BUTTON_BG, foreground=COLOR_FG, padding=5, borderwidth=1, relief=tk.RAISED, bordercolor=COLOR_FG_DIM)  # Konfiguracja stylu przycisku
-style.map('TButton', background=[('active', COLOR_BUTTON_ACTIVE)])  # Konfiguracja stylu aktywnego przycisku
-style.configure('TEntry', fieldbackground=COLOR_ENTRY_BG, foreground=COLOR_FG, insertcolor=COLOR_CURSOR, bordercolor=COLOR_FG_DIM, borderwidth=1)  # Konfiguracja stylu pola wprowadzania
-style.configure('Vertical.TScrollbar', background=COLOR_SCROLL_BG, troughcolor=COLOR_SCROLL_TROUGH, bordercolor=COLOR_BG, arrowcolor=COLOR_FG)  # Konfiguracja stylu paska przewijania
-style.map('Vertical.TScrollbar', background=[('active', COLOR_BUTTON_ACTIVE)])  # Konfiguracja stylu aktywnego paska przewijania
-
-
-# Konfiguracja siatki głównego okna
-root.rowconfigure(0, weight=0)  # Wiersz na panel wejściowy (stała wysokość)
-root.rowconfigure(1, weight=1)  # Wiersz na panel wyników i logów (rozciągliwy)
-root.columnconfigure(0, weight=1)  # Kolumna na panel wyników (rozciągliwa)
-root.columnconfigure(1, weight=2, minsize=300)  # Kolumna środkowa (nieużywana)
-root.columnconfigure(2, weight=1, minsize=300)  # Kolumna na panel logów (rozciągliwa)
-
-
-# Utworzenie panelu wejściowego
-input_frame = ttk.Frame(master=root)  # Inicjalizacja ramki panelu wejściowego
-input_frame.grid(row=0, column=0, columnspan=3, sticky="new", padx=10, pady=10)  # Umieszczenie ramki w siatce
-# Konfiguracja kolumn panelu wejściowego
-input_frame.columnconfigure(0, weight=1); input_frame.columnconfigure(1, weight=0)
-input_frame.columnconfigure(2, weight=0); input_frame.columnconfigure(3, weight=0)
-input_frame.columnconfigure(4, weight=1)
-# Etykieta "Podaj zapytanie:"
-text_zap = ttk.Label(input_frame, text="Podaj zapytanie:")  # Inicjalizacja etykiety
-text_zap.grid(row=0, column=1, padx=5, pady=5, sticky='e')  # Umieszczenie etykiety w siatce
-# Pole wprowadzania tekstu
-entry = ttk.Entry(input_frame, width=30)  # Inicjalizacja pola wprowadzania
-entry.grid(row=0, column=2, padx=5, pady=5, sticky='ew')  # Umieszczenie pola w siatce
-# Przycisk "Szukaj"
-button = ttk.Button(input_frame, text="Szukaj", command=search_nasa)  # Inicjalizacja przycisku
-button.grid(row=0, column=3, padx=5, pady=5, sticky='w')  # Umieszczenie przycisku w siatce
-
-
-# Utworzenie panelu wyników
-output_frame = ttk.Frame(master = root)  # Inicjalizacja ramki panelu wyników
-output_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))  # Umieszczenie ramki w siatce
-# Etykieta "Wyniki:"
-text_output = ttk.Label(output_frame, text="Wyniki:")  # Inicjalizacja etykiety
-text_output.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="nw")  # Umieszczenie etykiety w siatce
-
-
-# Utworzenie panelu logów
-log_frame = ttk.Frame(master = root)  # Inicjalizacja ramki panelu logów
-log_frame.grid(row=1, column=2, sticky="nsew", padx=(0, 10), pady=(0, 10))  # Umieszczenie ramki w siatce
-# Konfiguracja wierszy i kolumn panelu logów
-log_frame.rowconfigure(0, weight=0); log_frame.rowconfigure(1, weight=1)
-log_frame.columnconfigure(0, weight=1); log_frame.columnconfigure(1, weight=0)
-# Etykieta "Logi:"
-text_log_label = ttk.Label(log_frame, text="Logi:")  # Inicjalizacja etykiety
-text_log_label.grid(row=0, column=0, padx=5, pady=5, sticky="nw")  # Umieszczenie etykiety w siatce
-
-# Widget tekstowy do wyświetlania logów
-text_log_widget = tk.Text(log_frame, width=30, height=10, wrap=tk.WORD,
-    bg=COLOR_ENTRY_BG, fg=COLOR_FG,
-    insertbackground=COLOR_CURSOR, borderwidth=1, 
-    relief=tk.SOLID, highlightthickness=1,
-    highlightcolor=COLOR_FG_DIM, highlightbackground=COLOR_BG)  # Inicjalizacja widgetu tekstowego
-
-text_log_widget.grid(row=1, column=0, padx=5, pady=5, sticky="nsew")  # Umieszczenie widgetu w siatce
-# Pasek przewijania dla logów
-log_scrollbar = ttk.Scrollbar(log_frame, orient=tk.VERTICAL, command=text_log_widget.yview, style='Vertical.TScrollbar')  # Inicjalizacja paska przewijania
-log_scrollbar.grid(row=1, column=1, sticky="ns", pady=(5,5), padx=(0,5))  # Umieszczenie paska w siatce
-# Powiązanie paska przewijania z widgetem tekstowym
-text_log_widget['yscrollcommand'] = log_scrollbar.set  # Konfiguracja przewijania
-
-
-# Inicjalizacja obiektu do pobierania danych z API NASA
-fetcher = NasaImageFetcher()  # Utworzenie obiektu klasy NasaImageFetcher
-log_message("Aplikacja gotowa.")  # Logowanie informacji o gotowości aplikacji
-
-
-# Uruchomienie głównej pętli aplikacji
-root.mainloop()  # Uruchomienie głównej pętli zdarzeń Tkinter
+if __name__ == '__main__':  # Sprawdza, czy plik jest uruchamiany jako główny program
+    main()  # Wywołuje funkcję uruchamiającą aplikację
